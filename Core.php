@@ -1072,14 +1072,14 @@ class FriendsRSS_Core
             $this->log("从配置文件获取RSS配置，共 " . count($config) . " 个配置");
             
             // 调试：显示具体的配置内容
-            if (!empty($config)) {
-                $this->log("RSS配置详情: " . json_encode($config, JSON_UNESCAPED_UNICODE));
-                if (isset($config['青萍叙事'])) {
-                    $this->log("青萍叙事RSS配置已找到: " . $config['青萍叙事']);
-                } else {
-                    $this->log("青萍叙事RSS配置未找到");
-                }
-            }
+            // if (!empty($config)) {
+            //     $this->log("RSS配置详情: " . json_encode($config, JSON_UNESCAPED_UNICODE));
+            //     if (isset($config['青萍叙事'])) {
+            //         $this->log("青萍叙事RSS配置已找到: " . $config['青萍叙事']);
+            //     } else {
+            //         $this->log("青萍叙事RSS配置未找到");
+            //     }
+            // }
             
             // 更新缓存
             try {
@@ -1124,7 +1124,7 @@ class FriendsRSS_Core
         $cacheFile = $this->cacheDir . 'aggregated_articles.json';
 
         // 根据定时解析间隔设置缓存时间，确保与定时任务同步
-        $parseInterval = intval($this->pluginOptions->parseInterval) ?: 6; // 默认6小时
+        $parseInterval = intval($this->pluginOptions->autoRefreshInterval) ?: 6; // 默认6小时
         $cacheTime = $parseInterval * 3600; // 转换为秒，与定时解析间隔保持一致
 
         $this->log("获取聚合文章" . ($forceRefresh ? "（强制刷新）" : "") . "，缓存时间: {$parseInterval}小时");
