@@ -9,7 +9,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) exit;
  * 
  * @package FriendsRSS
  * @author 璇
- * @version 2.2.1
+ * @version 2.2.3
  * @link https://blog.ybyq.wang/
  */
 
@@ -57,7 +57,11 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         Typecho_Plugin::factory('Widget_Abstract_Contents')->contentEx = array('FriendsRSS_Plugin', 'parseShortcode');
         Typecho_Plugin::factory('Widget_Abstract_Contents')->excerptEx = array('FriendsRSS_Plugin', 'parseShortcode');
 
-        return '友链RSS插件激活成功！';
+        // 访问触发软定时：访客打开页面时后台异步执行到期任务（无需系统 crontab）
+        Typecho_Plugin::factory('Widget_Archive')->footer = array('FriendsRSS_Plugin', 'maybeTriggerSoftCron');
+        Typecho_Plugin::factory('admin/footer.php')->end = array('FriendsRSS_Plugin', 'maybeTriggerSoftCron');
+
+        return '友链RSS插件激活成功！默认已开启访问触发定时，一般无需再配置服务器 crontab。';
     }
 
     /**
@@ -154,6 +158,15 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
             _t('定时检测友链RSS地址的间隔时间（小时），默认240小时（10天）。设置为0表示禁用定时检测。RSS地址缓存时间会自动与定时检测间隔保持一致。')
         );
         $form->addInput($autoDetectInterval);
+
+        $enableSoftCron = new Typecho_Widget_Helper_Form_Element_Radio(
+            'enableSoftCron',
+            array('1' => _t('开启'), '0' => _t('关闭')),
+            '1',
+            _t('访问触发定时（推荐）'),
+            _t('开启后，有人访问博客或后台时会自动检查并在后台执行到期任务，一般无需再配置服务器 crontab。<br/>站点长期无人访问时任务会延后；若需要更准时，可额外配置系统 cron 调用 cron.php。')
+        );
+        $form->addInput($enableSoftCron);
     }
 
     /**
@@ -193,7 +206,98 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
      */
     public static function getVersion()
     {
-        return '1.0.0';
+        return '2.2.3';
+    }
+
+    /**
+     * 访问触发软定时：到期则异步拉起 cron，不阻塞当前页面
+     */
+    public static function maybeTriggerSoftCron()
+    {
+        static $triggered = false;
+        if ($triggered) {
+            return;
+        }
+        $triggered = true;
+
+        try {
+            // 避免在 cron 自身请求中递归触发
+            if (isset($_GET['do']) && $_GET['do'] === 'cron') {
+                return;
+            }
+            $requestUri = isset($_SERVER['REQUEST_URI']) ? $_SERVER['REQUEST_URI'] : '';
+            if (strpos($requestUri, 'friends-rss') !== false && strpos($requestUri, 'do=cron') !== false) {
+                return;
+            }
+
+            $pluginOptions = Typecho_Widget::widget('Widget_Options')->plugin('FriendsRSS');
+            if (isset($pluginOptions->enableSoftCron) && strval($pluginOptions->enableSoftCron) === '0') {
+                return;
+            }
+
+            require_once __DIR__ . '/Core.php';
+            $core = new FriendsRSS_Core();
+            if (!$core->isAnyScheduleDue()) {
+                return;
+            }
+            if (!$core->tryAcquireSoftCronLock(120)) {
+                return;
+            }
+
+            $options = Typecho_Widget::widget('Widget_Options');
+            $cronUrl = Typecho_Common::url('action/friends-rss?do=cron&soft=1', $options->index);
+            self::fireAndForgetHttp($cronUrl);
+        } catch (Exception $e) {
+            // 软定时失败不影响正常页面
+        }
+    }
+
+    /**
+     * 非阻塞发起 HTTP 请求，仅用于唤醒后台任务
+     */
+    private static function fireAndForgetHttp($url)
+    {
+        if (function_exists('curl_init')) {
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $url);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 1);
+            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 1);
+            if (defined('CURLOPT_NOSIGNAL')) {
+                curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
+            }
+            @curl_exec($ch);
+            @curl_close($ch);
+            return;
+        }
+
+        $parts = parse_url($url);
+        if (empty($parts['host'])) {
+            return;
+        }
+
+        $scheme = isset($parts['scheme']) ? $parts['scheme'] : 'http';
+        $host = $parts['host'];
+        $port = isset($parts['port']) ? $parts['port'] : ($scheme === 'https' ? 443 : 80);
+        $path = isset($parts['path']) ? $parts['path'] : '/';
+        if (!empty($parts['query'])) {
+            $path .= '?' . $parts['query'];
+        }
+
+        $target = ($scheme === 'https' ? 'ssl://' : '') . $host;
+        $fp = @fsockopen($target, $port, $errno, $errstr, 1);
+        if (!$fp) {
+            return;
+        }
+
+        $out = "GET {$path} HTTP/1.1\r\n";
+        $out .= "Host: {$host}\r\n";
+        $out .= "Connection: Close\r\n\r\n";
+        @fwrite($fp, $out);
+        @fclose($fp);
     }
 
     /**
@@ -466,3 +570,6 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
 </style>';
     }
 }
+
+// 升级兼容：每次加载插件时注册访问触发钩子（无需停用再启用）
+Typecho_Plugin::factory('Widget_Archive')->footer = array('FriendsRSS_Plugin', 'maybeTriggerSoftCron');

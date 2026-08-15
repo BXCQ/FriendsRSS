@@ -74,30 +74,32 @@ if (isset($_POST['action'])) {
             break;
         case 'manual_cron':
             $articles = $core->getAggregatedArticles(true);
-            // 更新定时任务状态
-            $cronFile = __TYPECHO_ROOT_DIR__ . '/usr/cache/friends_rss/cron_status.json';
-            $cronData = array(
-                'last_run' => time(),
+            $parseInterval = $core->getConfiguredInterval('autoRefreshInterval', 6);
+            $now = time();
+            $core->writeScheduleStatus('cron_status.json', array(
+                'last_run' => $now,
                 'articles_count' => count($articles),
-                'status' => 'success'
-            );
-            file_put_contents($cronFile, json_encode($cronData, JSON_PRETTY_PRINT), LOCK_EX);
+                'status' => 'success',
+                'next_run' => $parseInterval > 0 ? ($now + $parseInterval * 3600) : 0,
+                'trigger' => 'manual'
+            ));
             $notice = new Typecho_Widget_Helper_Layout();
             $notice->html('<div class="message success">定时解析执行完成，获取到 ' . count($articles) . ' 篇文章</div>');
             break;
         case 'manual_detect':
             $links = $core->getFriendLinks();
-            $results = $core->batchDetectRSS($links);
+            $results = $core->batchDetectRSS($links, null, true);
             $successCount = array_sum(array_column($results, 'success'));
-            // 更新定时检测状态
-            $detectFile = __TYPECHO_ROOT_DIR__ . '/usr/cache/friends_rss/detect_status.json';
-            $detectData = array(
-                'last_run' => time(),
+            $detectInterval = $core->getConfiguredInterval('autoDetectInterval', 240);
+            $now = time();
+            $core->writeScheduleStatus('detect_status.json', array(
+                'last_run' => $now,
                 'success_count' => $successCount,
                 'total_count' => count($links),
-                'status' => 'success'
-            );
-            file_put_contents($detectFile, json_encode($detectData, JSON_PRETTY_PRINT), LOCK_EX);
+                'status' => 'success',
+                'next_run' => $detectInterval > 0 ? ($now + $detectInterval * 3600) : 0,
+                'trigger' => 'manual'
+            ));
             $notice = new Typecho_Widget_Helper_Layout();
             $notice->html('<div class="message success">定时检测执行完成，成功检测到 ' . $successCount . ' 个RSS地址</div>');
             break;
@@ -442,21 +444,41 @@ if (file_exists($configFile)) {
             </div>
         </div>
 
+        <?php
+        $softCronEnabled = !isset($pluginOptions->enableSoftCron) || strval($pluginOptions->enableSoftCron) !== '0';
+        ?>
+        <div class="action-card" style="margin-bottom: 20px; grid-column: 1 / -1;">
+            <h3>🕒 定时方式</h3>
+            <p class="description">
+                <?php if ($softCronEnabled): ?>
+                    当前为<strong>访问触发</strong>：有人访问博客或后台时，到期任务会在后台自动执行，一般无需配置服务器 crontab。
+                <?php else: ?>
+                    访问触发已关闭。请自行配置系统 cron 调用 <code>cron.php</code>，或在插件设置中重新开启访问触发。
+                <?php endif; ?>
+            </p>
+        </div>
+
         <!-- 操作面板 -->
         <div class="action-grid">
             <div class="action-card">
                 <h3>⏰ 定时检测RSS地址</h3>
                 <p class="description">
-                    当前定时检测间隔：<?php echo $pluginOptions->autoDetectInterval ? $pluginOptions->autoDetectInterval . '小时' : '已禁用'; ?>
+                    <?php
+                    $detectInterval = $core->getConfiguredInterval('autoDetectInterval', 240);
+                    ?>
+                    当前定时检测间隔：<?php echo $detectInterval > 0 ? $detectInterval . '小时' : '已禁用'; ?>
                     <?php
                     $detectFile = __TYPECHO_ROOT_DIR__ . '/usr/cache/friends_rss/detect_status.json';
                     $detectStatus = 'inactive';
                     $nextDetectRun = '未设置';
-                    if (file_exists($detectFile)) {
+                    if ($detectInterval <= 0) {
+                        $detectStatus = 'inactive';
+                        $nextDetectRun = '已禁用';
+                    } elseif (file_exists($detectFile)) {
                         $detectData = json_decode(file_get_contents($detectFile), true);
                         if ($detectData && isset($detectData['last_run'])) {
                             $detectStatus = 'active';
-                            $nextDetectRunTime = $detectData['last_run'] + ($pluginOptions->autoDetectInterval * 3600);
+                            $nextDetectRunTime = intval($detectData['last_run']) + ($detectInterval * 3600);
                             $nextDetectRun = date('m-d H:i', $nextDetectRunTime);
                         }
                     }
@@ -475,16 +497,22 @@ if (file_exists($configFile)) {
             <div class="action-card">
                 <h3>📰 定时解析RSS内容</h3>
                 <p class="description">
-                    当前定时解析间隔：<?php echo $pluginOptions->autoRefreshInterval ? $pluginOptions->autoRefreshInterval . '小时' : '已禁用'; ?>
+                    <?php
+                    $parseInterval = $core->getConfiguredInterval('autoRefreshInterval', 6);
+                    ?>
+                    当前定时解析间隔：<?php echo $parseInterval > 0 ? $parseInterval . '小时' : '已禁用'; ?>
                     <?php
                     $cronFile = __TYPECHO_ROOT_DIR__ . '/usr/cache/friends_rss/cron_status.json';
                     $cronStatus = 'inactive';
                     $nextRun = '未设置';
-                    if (file_exists($cronFile)) {
+                    if ($parseInterval <= 0) {
+                        $cronStatus = 'inactive';
+                        $nextRun = '已禁用';
+                    } elseif (file_exists($cronFile)) {
                         $cronData = json_decode(file_get_contents($cronFile), true);
                         if ($cronData && isset($cronData['last_run'])) {
                             $cronStatus = 'active';
-                            $nextRunTime = $cronData['last_run'] + ($pluginOptions->autoRefreshInterval * 3600);
+                            $nextRunTime = intval($cronData['last_run']) + ($parseInterval * 3600);
                             $nextRun = date('m-d H:i', $nextRunTime);
                         }
                     }
@@ -764,5 +792,7 @@ if (file_exists($configFile)) {
 </script>
 
 <?php
+// 后台访问同样可触发软定时
+FriendsRSS_Plugin::maybeTriggerSoftCron();
 include __DIR__ . '/../../../admin/footer.php';
 ?>

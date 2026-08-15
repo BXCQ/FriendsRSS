@@ -256,14 +256,17 @@ class FriendsRSS_Action extends Typecho_Widget
     }
 
     /**
-     * 定时任务处理器
+     * 定时任务处理器（检测 + 解析）
      */
     public function cronTask()
     {
+        // 软定时/后台任务：客户端断开后继续跑完
+        ignore_user_abort(true);
+        @set_time_limit(600);
+
         // 检查是否有定时任务密钥（可选的安全验证）
         $secret = isset($_GET['secret']) ? $_GET['secret'] : '';
         $options = Typecho_Widget::widget('Widget_Options');
-        $pluginOptions = $options->plugin('FriendsRSS');
         
         // 如果设置了密钥，需要验证
         if ($secret && $secret !== md5($options->siteUrl . 'friends_rss_cron')) {
@@ -271,61 +274,12 @@ class FriendsRSS_Action extends Typecho_Widget
             exit('Access Denied');
         }
         
-        // 检查定时解析间隔设置
-        $interval = intval($pluginOptions->autoRefreshInterval);
-        if ($interval <= 0) {
-            exit('Cron disabled');
-        }
-        
-        // 检查是否需要执行（基于上次执行时间）
-        $cronFile = __TYPECHO_ROOT_DIR__ . '/usr/cache/friends_rss/cron_status.json';
-        $shouldRun = true;
-        
-        if (file_exists($cronFile)) {
-            $cronData = json_decode(file_get_contents($cronFile), true);
-            if ($cronData && isset($cronData['last_run'])) {
-                $nextRunTime = $cronData['last_run'] + ($interval * 3600);
-                if (time() < $nextRunTime) {
-                    $shouldRun = false;
-                }
-            }
-        }
-        
-        if (!$shouldRun) {
-            exit('Not time to run yet');
-        }
-        
         try {
             require_once __DIR__ . '/Core.php';
             $core = new FriendsRSS_Core();
-            
-            // 执行RSS聚合
-            $articles = $core->getAggregatedArticles(true);
-            
-            // 更新定时任务状态
-            $cronData = array(
-                'last_run' => time(),
-                'articles_count' => count($articles),
-                'status' => 'success',
-                'next_run' => time() + ($interval * 3600)
-            );
-            file_put_contents($cronFile, json_encode($cronData, JSON_PRETTY_PRINT), LOCK_EX);
-            
-            // 记录日志
-            $logMessage = "定时任务执行成功，获取到 " . count($articles) . " 篇文章";
-            $core->log($logMessage, 'CRON');
-            
-            echo "Cron executed successfully: " . count($articles) . " articles";
+            $result = $core->runScheduledTasks(false);
+            echo implode('; ', $result['messages']);
         } catch (Exception $e) {
-            // 记录错误状态
-            $cronData = array(
-                'last_run' => time(),
-                'status' => 'error',
-                'error' => $e->getMessage(),
-                'next_run' => time() + ($interval * 3600)
-            );
-            file_put_contents($cronFile, json_encode($cronData, JSON_PRETTY_PRINT), LOCK_EX);
-            
             http_response_code(500);
             echo "Cron error: " . $e->getMessage();
         }
