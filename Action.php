@@ -260,6 +260,10 @@ class FriendsRSS_Action extends Typecho_Widget
      */
     public function cronTask()
     {
+        // 软定时/后台任务：客户端断开后继续跑完
+        ignore_user_abort(true);
+        @set_time_limit(600);
+
         // 检查是否有定时任务密钥（可选的安全验证）
         $secret = isset($_GET['secret']) ? $_GET['secret'] : '';
         $options = Typecho_Widget::widget('Widget_Options');

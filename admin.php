@@ -444,6 +444,20 @@ if (file_exists($configFile)) {
             </div>
         </div>
 
+        <?php
+        $softCronEnabled = !isset($pluginOptions->enableSoftCron) || strval($pluginOptions->enableSoftCron) !== '0';
+        ?>
+        <div class="action-card" style="margin-bottom: 20px; grid-column: 1 / -1;">
+            <h3>🕒 定时方式</h3>
+            <p class="description">
+                <?php if ($softCronEnabled): ?>
+                    当前为<strong>访问触发</strong>：有人访问博客或后台时，到期任务会在后台自动执行，一般无需配置服务器 crontab。
+                <?php else: ?>
+                    访问触发已关闭。请自行配置系统 cron 调用 <code>cron.php</code>，或在插件设置中重新开启访问触发。
+                <?php endif; ?>
+            </p>
+        </div>
+
         <!-- 操作面板 -->
         <div class="action-grid">
             <div class="action-card">
@@ -778,5 +792,7 @@ if (file_exists($configFile)) {
 </script>
 
 <?php
+// 后台访问同样可触发软定时
+FriendsRSS_Plugin::maybeTriggerSoftCron();
 include __DIR__ . '/../../../admin/footer.php';
 ?>

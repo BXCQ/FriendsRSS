@@ -6,7 +6,8 @@
  * 1. 定时检测 RSS 地址（autoDetectInterval）
  * 2. 定时解析友链文章（autoRefreshInterval）
  *
- * 用法示例：
+ * 默认推荐使用插件「访问触发定时」，一般无需配置系统 crontab。
+ * 若站点访问很少、希望更准时，可额外配置：
  *   php /path/to/usr/plugins/FriendsRSS/cron.php
  *   curl "https://your-site/action/friends-rss?do=cron"
  */
@@ -16,6 +17,9 @@ define('__TYPECHO_ROOT_DIR__', dirname(dirname(dirname(__DIR__))));
 
 // 检查是否在命令行或HTTP环境中
 $isCli = php_sapi_name() === 'cli';
+
+ignore_user_abort(true);
+@set_time_limit(600);
 
 // 引入Typecho核心
 require_once __TYPECHO_ROOT_DIR__ . '/config.inc.php';

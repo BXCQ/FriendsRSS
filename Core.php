@@ -224,6 +224,18 @@ class FriendsRSS_Core
     }
 
     /**
+     * 是否有任意定时任务到期（轻量检查，供访问触发）
+     */
+    public function isAnyScheduleDue()
+    {
+        $detectInterval = $this->getConfiguredInterval('autoDetectInterval', 240);
+        $parseInterval = $this->getConfiguredInterval('autoRefreshInterval', 6);
+
+        return $this->isScheduleDue('detect_status.json', $detectInterval)
+            || $this->isScheduleDue('cron_status.json', $parseInterval);
+    }
+
+    /**
      * 写入定时任务状态
      */
     public function writeScheduleStatus($statusFileName, $data)
@@ -236,8 +248,46 @@ class FriendsRSS_Core
     }
 
     /**
+     * 尝试获取软定时触发锁，避免并发访客重复拉起任务
+     */
+    public function tryAcquireSoftCronLock($ttl = 120)
+    {
+        $lockFile = $this->cacheDir . 'soft_cron_spawn.lock';
+        if (file_exists($lockFile) && (time() - filemtime($lockFile)) < $ttl) {
+            return false;
+        }
+        if (!is_dir($this->cacheDir)) {
+            @mkdir($this->cacheDir, 0755, true);
+        }
+        return @file_put_contents($lockFile, (string) time(), LOCK_EX) !== false;
+    }
+
+    /**
+     * 尝试获取任务执行锁
+     */
+    private function tryAcquireCronRunLock($ttl = 1800)
+    {
+        $lockFile = $this->cacheDir . 'cron_running.lock';
+        if (file_exists($lockFile) && (time() - filemtime($lockFile)) < $ttl) {
+            return false;
+        }
+        if (!is_dir($this->cacheDir)) {
+            @mkdir($this->cacheDir, 0755, true);
+        }
+        return @file_put_contents($lockFile, (string) time(), LOCK_EX) !== false;
+    }
+
+    private function releaseCronRunLock()
+    {
+        $lockFile = $this->cacheDir . 'cron_running.lock';
+        if (file_exists($lockFile)) {
+            @unlink($lockFile);
+        }
+    }
+
+    /**
      * 执行到期的定时任务（RSS检测 + 文章解析）
-     * 供 cron.php / action?do=cron 调用
+     * 供 cron.php / action?do=cron / 访问触发软定时 调用
      */
     public function runScheduledTasks($force = false)
     {
@@ -248,6 +298,23 @@ class FriendsRSS_Core
             'messages' => array()
         );
 
+        if (!$this->tryAcquireCronRunLock()) {
+            $result['messages'][] = 'Cron already running';
+            return $result;
+        }
+
+        try {
+            return $this->doRunScheduledTasks($force, $result);
+        } finally {
+            $this->releaseCronRunLock();
+        }
+    }
+
+    /**
+     * 实际执行到期任务
+     */
+    private function doRunScheduledTasks($force, $result)
+    {
         $detectInterval = $this->getConfiguredInterval('autoDetectInterval', 240);
         $parseInterval = $this->getConfiguredInterval('autoRefreshInterval', 6);
 
