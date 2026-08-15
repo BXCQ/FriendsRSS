@@ -1,9 +1,17 @@
 <?php
 /**
  * FriendsRSS 定时任务脚本
+ *
+ * 同时处理：
+ * 1. 定时检测 RSS 地址（autoDetectInterval）
+ * 2. 定时解析友链文章（autoRefreshInterval）
+ *
+ * 用法示例：
+ *   php /path/to/usr/plugins/FriendsRSS/cron.php
+ *   curl "https://your-site/action/friends-rss?do=cron"
  */
 
-// 定义Typecho根目录
+// 定义Typecho根目录（usr/plugins/FriendsRSS -> 站点根目录）
 define('__TYPECHO_ROOT_DIR__', dirname(dirname(dirname(__DIR__))));
 
 // 检查是否在命令行或HTTP环境中
@@ -24,77 +32,38 @@ Typecho_Common::init();
 require_once __DIR__ . '/Core.php';
 
 try {
-    $options = Typecho_Widget::widget('Widget_Options');
-    $pluginOptions = $options->plugin('FriendsRSS');
-    
-    // 检查定时解析间隔设置
-    $interval = intval($pluginOptions->autoRefreshInterval);
-    if ($interval <= 0) {
-        if ($isCli) {
-            echo "Cron disabled (interval: 0)\n";
-        } else {
-            echo "Cron disabled (interval: 0)";
-        }
-        exit(0);
+    $core = new FriendsRSS_Core();
+    $result = $core->runScheduledTasks(false);
+
+    $output = implode('; ', $result['messages']);
+    if ($isCli) {
+        echo $output . "\n";
+    } else {
+        echo $output;
     }
-    
-    // 检查是否需要执行（基于上次执行时间）
-    $cronFile = __TYPECHO_ROOT_DIR__ . '/usr/cache/friends_rss/cron_status.json';
-    $shouldRun = true;
-    
-    if (file_exists($cronFile)) {
-        $cronData = json_decode(file_get_contents($cronFile), true);
-        if ($cronData && isset($cronData['last_run'])) {
-            $nextRunTime = $cronData['last_run'] + ($interval * 3600);
-            if (time() < $nextRunTime) {
-                $shouldRun = false;
-                $nextRun = date('Y-m-d H:i:s', $nextRunTime);
+
+    // 两个任务都未到期 / 都禁用时正常退出
+    exit(0);
+} catch (Exception $e) {
+    // 尽量记录错误，避免下次立刻反复重试时可被状态文件挡住
+    try {
+        if (isset($core) && $core instanceof FriendsRSS_Core) {
+            $core->log('定时任务异常: ' . $e->getMessage(), 'ERROR');
+            $parseInterval = $core->getConfiguredInterval('autoRefreshInterval', 6);
+            if ($parseInterval > 0) {
+                $now = time();
+                $core->writeScheduleStatus('cron_status.json', array(
+                    'last_run' => $now,
+                    'status' => 'error',
+                    'error' => $e->getMessage(),
+                    'next_run' => $now + ($parseInterval * 3600)
+                ));
             }
         }
+    } catch (Exception $ignore) {
+        // ignore secondary failures
     }
-    
-    if (!$shouldRun) {
-        if ($isCli) {
-            echo "Not time to run yet. Next run: $nextRun\n";
-        } else {
-            echo "Not time to run yet. Next run: $nextRun";
-        }
-        exit(0);
-    }
-    
-    // 执行RSS聚合
-    $core = new FriendsRSS_Core();
-    $articles = $core->getAggregatedArticles(true);
-    
-    // 更新定时任务状态
-    $cronData = array(
-        'last_run' => time(),
-        'articles_count' => count($articles),
-        'status' => 'success',
-        'next_run' => time() + ($interval * 3600)
-    );
-    file_put_contents($cronFile, json_encode($cronData, JSON_PRETTY_PRINT), LOCK_EX);
-    
-    // 记录日志
-    $logMessage = "定时任务执行成功，获取到 " . count($articles) . " 篇文章";
-    $core->log($logMessage, 'CRON');
-    
-    if ($isCli) {
-        echo "Cron executed successfully: " . count($articles) . " articles\n";
-    } else {
-        echo "Cron executed successfully: " . count($articles) . " articles";
-    }
-    
-} catch (Exception $e) {
-    // 记录错误状态
-    $cronData = array(
-        'last_run' => time(),
-        'status' => 'error',
-        'error' => $e->getMessage(),
-        'next_run' => time() + ($interval * 3600)
-    );
-    file_put_contents($cronFile, json_encode($cronData, JSON_PRETTY_PRINT), LOCK_EX);
-    
+
     if ($isCli) {
         echo "Cron error: " . $e->getMessage() . "\n";
     } else {
@@ -102,4 +71,4 @@ try {
         echo "Cron error: " . $e->getMessage();
     }
     exit(1);
-} 
+}

@@ -9,7 +9,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) exit;
  * 
  * @package FriendsRSS
  * @author 璇
- * @version 2.2.1
+ * @version 2.2.2
  * @link https://blog.ybyq.wang/
  */
 

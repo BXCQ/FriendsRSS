@@ -179,6 +179,132 @@ class FriendsRSS_Core
     }
 
     /**
+     * 读取配置的时间间隔（小时）
+     * 未设置时使用默认值；显式设为 0 表示禁用（不会被默认值覆盖）
+     */
+    public function getConfiguredInterval($key, $default)
+    {
+        if (!isset($this->pluginOptions->$key) || $this->pluginOptions->$key === '' || $this->pluginOptions->$key === null) {
+            return intval($default);
+        }
+        return intval($this->pluginOptions->$key);
+    }
+
+    /**
+     * 将间隔小时转为缓存秒数；0 表示定时禁用，缓存长期有效（仅强制刷新）
+     */
+    private function getCacheTtlSeconds($intervalHours)
+    {
+        if ($intervalHours <= 0) {
+            return 10 * 365 * 86400;
+        }
+        return $intervalHours * 3600;
+    }
+
+    /**
+     * 判断定时任务是否到期
+     */
+    public function isScheduleDue($statusFileName, $intervalHours)
+    {
+        if ($intervalHours <= 0) {
+            return false;
+        }
+
+        $statusFile = $this->cacheDir . $statusFileName;
+        if (!file_exists($statusFile)) {
+            return true;
+        }
+
+        $data = json_decode(@file_get_contents($statusFile), true);
+        if (!$data || !isset($data['last_run'])) {
+            return true;
+        }
+
+        return time() >= (intval($data['last_run']) + ($intervalHours * 3600));
+    }
+
+    /**
+     * 写入定时任务状态
+     */
+    public function writeScheduleStatus($statusFileName, $data)
+    {
+        if (!is_dir($this->cacheDir)) {
+            @mkdir($this->cacheDir, 0755, true);
+        }
+        $statusFile = $this->cacheDir . $statusFileName;
+        return file_put_contents($statusFile, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX) !== false;
+    }
+
+    /**
+     * 执行到期的定时任务（RSS检测 + 文章解析）
+     * 供 cron.php / action?do=cron 调用
+     */
+    public function runScheduledTasks($force = false)
+    {
+        $result = array(
+            'detect' => null,
+            'parse' => null,
+            'ran' => false,
+            'messages' => array()
+        );
+
+        $detectInterval = $this->getConfiguredInterval('autoDetectInterval', 240);
+        $parseInterval = $this->getConfiguredInterval('autoRefreshInterval', 6);
+
+        // 1) 定时检测 RSS 地址
+        if ($detectInterval <= 0) {
+            $result['messages'][] = 'Detect cron disabled (interval: 0)';
+        } elseif ($force || $this->isScheduleDue('detect_status.json', $detectInterval)) {
+            $links = $this->getFriendLinks();
+            $detectResults = $this->batchDetectRSS($links, null, true);
+            $successCount = array_sum(array_column($detectResults, 'success'));
+            $now = time();
+            $this->writeScheduleStatus('detect_status.json', array(
+                'last_run' => $now,
+                'success_count' => $successCount,
+                'total_count' => count($links),
+                'status' => 'success',
+                'next_run' => $now + ($detectInterval * 3600)
+            ));
+            $result['detect'] = array(
+                'success' => $successCount,
+                'total' => count($links)
+            );
+            $result['ran'] = true;
+            $msg = "定时检测执行成功，成功 {$successCount}/" . count($links);
+            $result['messages'][] = $msg;
+            $this->log($msg, 'CRON');
+        } else {
+            $result['messages'][] = 'Detect not due yet';
+        }
+
+        // 2) 定时解析文章
+        if ($parseInterval <= 0) {
+            $result['messages'][] = 'Parse cron disabled (interval: 0)';
+        } elseif ($force || $this->isScheduleDue('cron_status.json', $parseInterval)) {
+            $articles = $this->getAggregatedArticles(true);
+            $now = time();
+            $this->writeScheduleStatus('cron_status.json', array(
+                'last_run' => $now,
+                'articles_count' => count($articles),
+                'status' => 'success',
+                'next_run' => $now + ($parseInterval * 3600)
+            ));
+            $result['parse'] = array(
+                'articles_count' => count($articles)
+            );
+            $result['ran'] = true;
+            $msg = '定时解析执行成功，获取到 ' . count($articles) . ' 篇文章';
+            $result['messages'][] = $msg;
+            $this->log($msg, 'CRON');
+        } else {
+            $result['messages'][] = 'Parse not due yet';
+        }
+
+        return $result;
+    }
+
+    /**
      * 优化的RSS URL检测（分轮检测策略）
      */
     public function detectRSSUrl($siteUrl, $timeout = 2)
@@ -186,9 +312,11 @@ class FriendsRSS_Core
         $siteUrl = rtrim($siteUrl, '/');
         $cacheKey = md5($siteUrl . '_rss_detect');
         $cacheFile = $this->cacheDir . 'rss_' . $cacheKey . '.json';
-        $cacheTime = 7 * 86400; // RSS URL缓存7天（RSS地址相对稳定）
+        // 与定时检测间隔保持一致（0=禁用定时，缓存长期有效）
+        $detectInterval = $this->getConfiguredInterval('autoDetectInterval', 240);
+        $cacheTime = $this->getCacheTtlSeconds($detectInterval);
 
-        $this->log("开始检测RSS URL: $siteUrl (超时: {$timeout}s)");
+        $this->log("开始检测RSS URL: $siteUrl (超时: {$timeout}s, 缓存: {$detectInterval}小时)");
 
         // 检查缓存
         if (file_exists($cacheFile) && (time() - filemtime($cacheFile)) < $cacheTime) {
@@ -1030,9 +1158,9 @@ class FriendsRSS_Core
         
         $this->log("开始获取RSS配置，配置文件: $configFile");
         
-        // 根据定时检测间隔设置缓存时间
-        $detectInterval = intval($this->pluginOptions->autoDetectInterval) ?: 240; // 默认240小时（10天）
-        $cacheTime = $detectInterval * 3600; // 转换为秒
+        // 根据定时检测间隔设置缓存时间（显式 0 表示禁用，不被默认值覆盖）
+        $detectInterval = $this->getConfiguredInterval('autoDetectInterval', 240);
+        $cacheTime = $this->getCacheTtlSeconds($detectInterval);
         
         // 检查缓存（如果配置文件比缓存文件新，则强制刷新）
         $configFileTime = file_exists($configFile) ? filemtime($configFile) : 0;
@@ -1117,15 +1245,32 @@ class FriendsRSS_Core
     }
 
     /**
+     * 仅从缓存读取聚合文章（不触发网络请求）
+     */
+    public function getCachedArticles()
+    {
+        $cacheFile = $this->cacheDir . 'aggregated_articles.json';
+        if (!file_exists($cacheFile)) {
+            return array();
+        }
+        $cached = @file_get_contents($cacheFile);
+        if (!$cached) {
+            return array();
+        }
+        $articles = json_decode($cached, true);
+        return is_array($articles) ? $articles : array();
+    }
+
+    /**
      * 获取聚合文章（使用手动配置的RSS地址）
      */
     public function getAggregatedArticles($forceRefresh = false)
     {
         $cacheFile = $this->cacheDir . 'aggregated_articles.json';
 
-        // 根据定时解析间隔设置缓存时间，确保与定时任务同步
-        $parseInterval = intval($this->pluginOptions->autoRefreshInterval) ?: 6; // 默认6小时
-        $cacheTime = $parseInterval * 3600; // 转换为秒，与定时解析间隔保持一致
+        // 根据定时解析间隔设置缓存时间（显式 0 表示禁用，不被默认值覆盖）
+        $parseInterval = $this->getConfiguredInterval('autoRefreshInterval', 6);
+        $cacheTime = $this->getCacheTtlSeconds($parseInterval);
 
         $this->log("获取聚合文章" . ($forceRefresh ? "（强制刷新）" : "") . "，缓存时间: {$parseInterval}小时");
 
@@ -1161,7 +1306,8 @@ class FriendsRSS_Core
         try {
             $allArticles = array();
             $links = $this->getFriendLinks();
-            $rssConfig = $this->getRSSConfigWithCache(true); // 强制刷新缓存
+            // 读取已保存的 RSS 配置即可，不要强制刷新配置缓存（否则会干扰定时检测间隔）
+            $rssConfig = $this->getRSSConfigWithCache(false);
 
             $this->log("开始聚合文章，共 " . count($links) . " 个友链，已配置RSS: " . count($rssConfig));
 
@@ -1208,6 +1354,18 @@ class FriendsRSS_Core
             // 保存缓存
             @file_put_contents($cacheFile, json_encode($allArticles), LOCK_EX);
 
+            // 懒加载刷新时同步 cron 状态，避免「下次执行时间」与真实更新脱节
+            if ($parseInterval > 0) {
+                $now = time();
+                $this->writeScheduleStatus('cron_status.json', array(
+                    'last_run' => $now,
+                    'articles_count' => count($allArticles),
+                    'status' => 'success',
+                    'next_run' => $now + ($parseInterval * 3600),
+                    'trigger' => $forceRefresh ? 'force' : 'cache_expire'
+                ));
+            }
+
             return $allArticles;
         } catch (Exception $e) {
             $this->log("聚合文章异常: " . $e->getMessage(), 'ERROR');
@@ -1227,7 +1385,8 @@ class FriendsRSS_Core
     {
         try {
             $links = $this->getFriendLinks();
-            $articles = $this->getAggregatedArticles();
+            // 仅读缓存，避免打开后台/统计时触发整轮聚合
+            $articles = $this->getCachedArticles();
             $rssConfig = $this->getRSSConfig();
 
             $blogCount = count($links);
