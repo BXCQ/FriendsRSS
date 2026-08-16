@@ -18,8 +18,8 @@
 
 ## 系统要求
 
-- Typecho 1.2.1+
-- PHP 7.0+（推荐 PHP 8.0+）
+- Typecho 1.2.1+ / **1.3.0**
+- PHP 7.2+（Typecho 1.3.0 需 PHP 7.4+；推荐 PHP 8.0+）
 - PHP扩展：SimpleXML、cURL（推荐）
 - 友链数据表（通常由友链管理插件创建）
 
@@ -206,6 +206,11 @@ FriendsRSS/
 4. 联系插件作者获取技术支持
 
 ## 更新日志
+
+### v2.3.0 (2026/8/16)
+- **兼容** - 正式支持 Typecho 1.3.0：插件改为 `TypechoPlugin\FriendsRSS` 命名空间，并保留旧类名别名
+- **兼容** - Action 实现 `Widget_Interface_Do` / `action()`，修复 1.3 下 `/action/friends-rss` 可能 404 的问题
+- **兼容** - `cron.php` / `ajax.php` 启动方式改为依赖 `config.inc.php` 自动加载，避免 1.3 路径变更导致失败
 
 ### v2.2.3 (2026/8/15)
 - **功能** - 新增「访问触发定时」：访客或后台访问时自动异步执行到期任务，默认无需配置服务器 crontab

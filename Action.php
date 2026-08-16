@@ -1,15 +1,25 @@
 <?php
-if (!defined('__TYPECHO_ROOT_DIR__')) exit;
+if (!defined('__TYPECHO_ROOT_DIR__')) {
+    exit;
+}
 
 /**
- * 友链RSS Action处理器
+ * 友链RSS Action 处理器
+ *
+ * 兼容 Typecho 1.2.x / 1.3.0（需实现 ActionInterface / Widget_Interface_Do）
  */
-class FriendsRSS_Action extends Typecho_Widget
+
+namespace TypechoPlugin\FriendsRSS;
+
+use Exception;
+use stdClass;
+
+class Action extends \Typecho_Widget implements \Widget_Interface_Do
 {
     /**
-     * 执行Action
+     * Action 入口（Typecho 1.2/1.3 均通过此方法调度）
      */
-    public function execute()
+    public function action()
     {
         $this->on($this->request->is('do=rss'))->rss();
         $this->on($this->request->is('do=page'))->pageData();
@@ -22,21 +32,32 @@ class FriendsRSS_Action extends Typecho_Widget
     }
 
     /**
+     * 兼容旧逻辑：部分环境会在构造后调用 execute()
+     */
+    public function execute()
+    {
+        // 避免与 Widget\Action 再次调用 action() 时重复执行
+        // 仅在直接以 Widget 方式实例化时作为入口
+    }
+
+    /**
      * 输出RSS
      */
     public function rss()
     {
         require_once __DIR__ . '/Core.php';
-        $core = new FriendsRSS_Core();
-        $articles = $core->getAggregatedArticles(false); // 不强制刷新，只读取缓存
-        
+        $core = class_exists(__NAMESPACE__ . '\\Core', false)
+            ? new Core()
+            : new \FriendsRSS_Core();
+        $articles = $core->getAggregatedArticles(false);
+
         header('Content-Type: application/rss+xml; charset=utf-8');
-        
-        $options = Typecho_Widget::widget('Widget_Options');
+
+        $options = \Typecho_Widget::widget('Widget_Options');
         $siteUrl = $options->siteUrl;
         $title = $options->title . ' - 友链RSS聚合';
         $description = '来自友链博客的最新文章聚合';
-        
+
         echo '<?xml version="1.0" encoding="UTF-8"?>' . "\n";
         echo '<rss version="2.0">' . "\n";
         echo '<channel>' . "\n";
@@ -45,7 +66,7 @@ class FriendsRSS_Action extends Typecho_Widget
         echo '<description>' . htmlspecialchars($description) . '</description>' . "\n";
         echo '<language>zh-CN</language>' . "\n";
         echo '<lastBuildDate>' . date('r') . '</lastBuildDate>' . "\n";
-        
+
         foreach ($articles as $article) {
             echo '<item>' . "\n";
             echo '<title>' . htmlspecialchars($article['title']) . '</title>' . "\n";
@@ -56,7 +77,7 @@ class FriendsRSS_Action extends Typecho_Widget
             echo '<guid>' . htmlspecialchars($article['link']) . '</guid>' . "\n";
             echo '</item>' . "\n";
         }
-        
+
         echo '</channel>' . "\n";
         echo '</rss>' . "\n";
         exit;
@@ -68,11 +89,11 @@ class FriendsRSS_Action extends Typecho_Widget
     public function pageData()
     {
         header('Content-Type: application/json; charset=utf-8');
-        
+
         try {
-            $options = Typecho_Widget::widget('Widget_Options');
+            $options = \Typecho_Widget::widget('Widget_Options');
             $pluginOptions = $options->plugin('FriendsRSS');
-            
+
             if (!$pluginOptions->enableFrontend) {
                 echo json_encode([
                     'success' => false,
@@ -80,16 +101,15 @@ class FriendsRSS_Action extends Typecho_Widget
                 ]);
                 exit;
             }
-            
+
             require_once __DIR__ . '/Core.php';
-            $core = new FriendsRSS_Core();
-            
-            // 检查是否强制刷新
+            $core = new \FriendsRSS_Core();
+
             $forceRefresh = isset($_GET['refresh']) && $_GET['refresh'] == '1';
-            
+
             $articles = $core->getAggregatedArticles($forceRefresh);
             $stats = $core->getStats();
-            
+
             echo json_encode([
                 'success' => true,
                 'articles' => $articles,
@@ -109,22 +129,21 @@ class FriendsRSS_Action extends Typecho_Widget
      */
     public function page()
     {
-        $options = Typecho_Widget::widget('Widget_Options');
+        $options = \Typecho_Widget::widget('Widget_Options');
         $pluginOptions = $options->plugin('FriendsRSS');
-        
+
         if (!$pluginOptions->enableFrontend) {
-            throw new Typecho_Widget_Exception('前台页面已禁用', 404);
+            throw new \Typecho_Widget_Exception('前台页面已禁用', 404);
         }
-        
+
         require_once __DIR__ . '/Core.php';
-        $core = new FriendsRSS_Core();
-        $articles = $core->getAggregatedArticles(false); // 不强制刷新，只读取缓存
+        $core = new \FriendsRSS_Core();
+        $articles = $core->getAggregatedArticles(false);
         $stats = $core->getStats();
-        
-        // 创建模拟的$this对象供模板使用
+
         $templateThis = new stdClass();
         $templateThis->options = $options;
-        
+
         include_once __DIR__ . '/template/page.php';
         exit;
     }
@@ -134,16 +153,15 @@ class FriendsRSS_Action extends Typecho_Widget
      */
     public function clearCache()
     {
-        // 检查权限
-        $user = Typecho_Widget::widget('Widget_User');
-        if (!$user->hasLogin() || !$user->pass('administrator')) {
-            throw new Typecho_Widget_Exception('权限不足', 403);
+        $user = \Typecho_Widget::widget('Widget_User');
+        if (!$user->hasLogin() || !$user->pass('administrator', true)) {
+            throw new \Typecho_Widget_Exception('权限不足', 403);
         }
-        
+
         require_once __DIR__ . '/Core.php';
-        $core = new FriendsRSS_Core();
-        $result = $core->clearCache();
-        
+        $core = new \FriendsRSS_Core();
+        $core->clearCache();
+
         $this->response->goBack();
     }
 
@@ -153,11 +171,10 @@ class FriendsRSS_Action extends Typecho_Widget
     public function detectRSS()
     {
         header('Content-Type: application/json; charset=utf-8');
-        
+
         try {
-            // 检查权限
-            $user = Typecho_Widget::widget('Widget_User');
-            if (!$user->hasLogin() || !$user->pass('administrator')) {
+            $user = \Typecho_Widget::widget('Widget_User');
+            if (!$user->hasLogin() || !$user->pass('administrator', true)) {
                 echo json_encode([
                     'success' => false,
                     'error' => '权限不足'
@@ -166,11 +183,10 @@ class FriendsRSS_Action extends Typecho_Widget
             }
 
             require_once __DIR__ . '/Core.php';
-            $core = new FriendsRSS_Core();
-            
-            // 获取友链列表
+            $core = new \FriendsRSS_Core();
+
             $links = $core->getFriendLinks();
-            
+
             if (empty($links)) {
                 echo json_encode([
                     'success' => false,
@@ -179,9 +195,8 @@ class FriendsRSS_Action extends Typecho_Widget
                 exit;
             }
 
-            // 批量检测RSS
             $results = $core->batchDetectRSS($links);
-            
+
             echo json_encode([
                 'success' => true,
                 'results' => $results,
@@ -203,15 +218,14 @@ class FriendsRSS_Action extends Typecho_Widget
     public function refreshData()
     {
         header('Content-Type: application/json; charset=utf-8');
-        
+
         try {
             require_once __DIR__ . '/Core.php';
-            $core = new FriendsRSS_Core();
-            
-            // 强制刷新聚合文章
+            $core = new \FriendsRSS_Core();
+
             $articles = $core->getAggregatedArticles(true);
             $stats = $core->getStats();
-            
+
             echo json_encode([
                 'success' => true,
                 'articles' => $articles,
@@ -233,14 +247,14 @@ class FriendsRSS_Action extends Typecho_Widget
     public function getStats()
     {
         header('Content-Type: application/json; charset=utf-8');
-        
+
         try {
             require_once __DIR__ . '/Core.php';
-            $core = new FriendsRSS_Core();
-            
+            $core = new \FriendsRSS_Core();
+
             $stats = $core->getStats();
             $cacheStats = $core->getCacheStats();
-            
+
             echo json_encode([
                 'success' => true,
                 'stats' => $stats,
@@ -260,29 +274,31 @@ class FriendsRSS_Action extends Typecho_Widget
      */
     public function cronTask()
     {
-        // 软定时/后台任务：客户端断开后继续跑完
         ignore_user_abort(true);
         @set_time_limit(600);
 
-        // 检查是否有定时任务密钥（可选的安全验证）
         $secret = isset($_GET['secret']) ? $_GET['secret'] : '';
-        $options = Typecho_Widget::widget('Widget_Options');
-        
-        // 如果设置了密钥，需要验证
+        $options = \Typecho_Widget::widget('Widget_Options');
+
         if ($secret && $secret !== md5($options->siteUrl . 'friends_rss_cron')) {
             http_response_code(403);
             exit('Access Denied');
         }
-        
+
         try {
             require_once __DIR__ . '/Core.php';
-            $core = new FriendsRSS_Core();
+            $core = new \FriendsRSS_Core();
             $result = $core->runScheduledTasks(false);
             echo implode('; ', $result['messages']);
         } catch (Exception $e) {
             http_response_code(500);
-            echo "Cron error: " . $e->getMessage();
+            echo 'Cron error: ' . $e->getMessage();
         }
         exit;
     }
+}
+
+// 兼容旧类名（1.2 插件句柄 / 手动引用）
+if (!class_exists('FriendsRSS_Action', false)) {
+    class_alias(__NAMESPACE__ . '\\Action', 'FriendsRSS_Action');
 }

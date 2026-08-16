@@ -3,63 +3,66 @@ if (!defined('__TYPECHO_ROOT_DIR__')) exit;
 
 /**
  * 友链RSS聚合插件
- * 
+ *
  * 自动获取友链博客的最新文章，生成RSS聚合feed，支持前台展示和RSS订阅。
- * 兼容 Typecho 1.2.1 和 PHP 8.0
- * 
+ * 兼容 Typecho 1.2.1+ / 1.3.0，PHP 7.2+（推荐 8.0+）
+ *
  * @package FriendsRSS
  * @author 璇
- * @version 2.2.3
+ * @version 2.3.0
+ * @since 1.2.1
  * @link https://blog.ybyq.wang/
  */
 
-class FriendsRSS_Plugin implements Typecho_Plugin_Interface
+namespace TypechoPlugin\FriendsRSS;
+
+class Plugin implements \Typecho_Plugin_Interface
 {
     /**
      * 激活插件方法
      *
      * @access public
      * @return string
-     * @throws Typecho_Plugin_Exception
+     * @throws \Typecho_Plugin_Exception
      */
     public static function activate()
     {
         // 检查PHP版本
-        if (version_compare(PHP_VERSION, '7.0.0', '<')) {
-            throw new Typecho_Plugin_Exception('友链RSS插件需要PHP 7.0或更高版本');
+        if (version_compare(PHP_VERSION, '7.2.0', '<')) {
+            throw new \Typecho_Plugin_Exception('友链RSS插件需要PHP 7.2或更高版本（Typecho 1.3.0 需 PHP 7.4+）');
         }
 
         // 检查必要的PHP扩展
         if (!extension_loaded('curl') && !function_exists('file_get_contents')) {
-            throw new Typecho_Plugin_Exception('友链RSS插件需要cURL扩展或file_get_contents函数');
+            throw new \Typecho_Plugin_Exception('友链RSS插件需要cURL扩展或file_get_contents函数');
         }
 
         if (!extension_loaded('simplexml')) {
-            throw new Typecho_Plugin_Exception('友链RSS插件需要SimpleXML扩展');
+            throw new \Typecho_Plugin_Exception('友链RSS插件需要SimpleXML扩展');
         }
 
         // 创建缓存目录
         $cacheDir = __TYPECHO_ROOT_DIR__ . '/usr/cache/friends_rss/';
         if (!is_dir($cacheDir)) {
             if (!mkdir($cacheDir, 0755, true)) {
-                throw new Typecho_Plugin_Exception('无法创建缓存目录：' . $cacheDir);
+                throw new \Typecho_Plugin_Exception('无法创建缓存目录：' . $cacheDir);
             }
         }
 
         // 添加管理面板
-        Typecho_Plugin::factory('admin/menu.php')->navBar = array('FriendsRSS_Plugin', 'render');
-        Helper::addPanel(3, 'FriendsRSS/admin.php', '友链RSS', '友链RSS聚合管理', 'administrator');
+        \Typecho_Plugin::factory('admin/menu.php')->navBar = array(__CLASS__, 'render');
+        \Helper::addPanel(3, 'FriendsRSS/admin.php', '友链RSS', '友链RSS聚合管理', 'administrator');
 
         // 添加Action处理器
-        Helper::addAction('friends-rss', 'FriendsRSS_Action');
+        \Helper::addAction('friends-rss', Action::class);
 
         // 注册短代码处理器
-        Typecho_Plugin::factory('Widget_Abstract_Contents')->contentEx = array('FriendsRSS_Plugin', 'parseShortcode');
-        Typecho_Plugin::factory('Widget_Abstract_Contents')->excerptEx = array('FriendsRSS_Plugin', 'parseShortcode');
+        \Typecho_Plugin::factory('Widget_Abstract_Contents')->contentEx = array(__CLASS__, 'parseShortcode');
+        \Typecho_Plugin::factory('Widget_Abstract_Contents')->excerptEx = array(__CLASS__, 'parseShortcode');
 
         // 访问触发软定时：访客打开页面时后台异步执行到期任务（无需系统 crontab）
-        Typecho_Plugin::factory('Widget_Archive')->footer = array('FriendsRSS_Plugin', 'maybeTriggerSoftCron');
-        Typecho_Plugin::factory('admin/footer.php')->end = array('FriendsRSS_Plugin', 'maybeTriggerSoftCron');
+        \Typecho_Plugin::factory('Widget_Archive')->footer = array(__CLASS__, 'maybeTriggerSoftCron');
+        \Typecho_Plugin::factory('admin/footer.php')->end = array(__CLASS__, 'maybeTriggerSoftCron');
 
         return '友链RSS插件激活成功！默认已开启访问触发定时，一般无需再配置服务器 crontab。';
     }
@@ -72,8 +75,8 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
      */
     public static function deactivate()
     {
-        Helper::removePanel(3, 'FriendsRSS/admin.php');
-        Helper::removeAction('friends-rss');
+        \Helper::removePanel(3, 'FriendsRSS/admin.php');
+        \Helper::removeAction('friends-rss');
     }
 
     /**
@@ -88,12 +91,12 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
      * 获取插件配置面板
      *
      * @access public
-     * @param Typecho_Widget_Helper_Form $form 配置面板
+     * @param \Typecho_Widget_Helper_Form $form 配置面板
      * @return void
      */
-    public static function config(Typecho_Widget_Helper_Form $form)
+    public static function config(\Typecho_Widget_Helper_Form $form)
     {
-        $maxArticles = new Typecho_Widget_Helper_Form_Element_Text(
+        $maxArticles = new \Typecho_Widget_Helper_Form_Element_Text(
             'maxArticles',
             null,
             '20',
@@ -102,7 +105,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($maxArticles);
 
-        $articlesPerBlog = new Typecho_Widget_Helper_Form_Element_Text(
+        $articlesPerBlog = new \Typecho_Widget_Helper_Form_Element_Text(
             'articlesPerBlog',
             null,
             '3',
@@ -111,7 +114,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($articlesPerBlog);
 
-        $enableFrontend = new Typecho_Widget_Helper_Form_Element_Radio(
+        $enableFrontend = new \Typecho_Widget_Helper_Form_Element_Radio(
             'enableFrontend',
             array(
                 '1' => _t('启用'),
@@ -123,7 +126,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($enableFrontend);
 
-        $linkCategory = new Typecho_Widget_Helper_Form_Element_Text(
+        $linkCategory = new \Typecho_Widget_Helper_Form_Element_Text(
             'linkCategory',
             null,
             '',
@@ -132,7 +135,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($linkCategory);
 
-        $excludeUrls = new Typecho_Widget_Helper_Form_Element_Textarea(
+        $excludeUrls = new \Typecho_Widget_Helper_Form_Element_Textarea(
             'excludeUrls',
             null,
             '',
@@ -141,7 +144,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($excludeUrls);
 
-        $autoRefreshInterval = new Typecho_Widget_Helper_Form_Element_Text(
+        $autoRefreshInterval = new \Typecho_Widget_Helper_Form_Element_Text(
             'autoRefreshInterval',
             null,
             '6',
@@ -150,7 +153,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($autoRefreshInterval);
 
-        $autoDetectInterval = new Typecho_Widget_Helper_Form_Element_Text(
+        $autoDetectInterval = new \Typecho_Widget_Helper_Form_Element_Text(
             'autoDetectInterval',
             null,
             '240',
@@ -159,7 +162,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         );
         $form->addInput($autoDetectInterval);
 
-        $enableSoftCron = new Typecho_Widget_Helper_Form_Element_Radio(
+        $enableSoftCron = new \Typecho_Widget_Helper_Form_Element_Radio(
             'enableSoftCron',
             array('1' => _t('开启'), '0' => _t('关闭')),
             '1',
@@ -173,10 +176,10 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
      * 个人用户的配置面板
      *
      * @access public
-     * @param Typecho_Widget_Helper_Form $form
+     * @param \Typecho_Widget_Helper_Form $form
      * @return void
      */
-    public static function personalConfig(Typecho_Widget_Helper_Form $form)
+    public static function personalConfig(\Typecho_Widget_Helper_Form $form)
     {
         // 个人配置暂时为空
     }
@@ -188,13 +191,13 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
      */
     public static function checkLinksTable()
     {
-        $db = Typecho_Db::get();
+        $db = \Typecho_Db::get();
         $prefix = $db->getPrefix();
 
         try {
             $db->fetchRow($db->select()->from($prefix . 'links')->limit(1));
             return true;
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             return false;
         }
     }
@@ -206,7 +209,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
      */
     public static function getVersion()
     {
-        return '2.2.3';
+        return '2.3.0';
     }
 
     /**
@@ -230,13 +233,13 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
                 return;
             }
 
-            $pluginOptions = Typecho_Widget::widget('Widget_Options')->plugin('FriendsRSS');
+            $pluginOptions = \Typecho_Widget::widget('Widget_Options')->plugin('FriendsRSS');
             if (isset($pluginOptions->enableSoftCron) && strval($pluginOptions->enableSoftCron) === '0') {
                 return;
             }
 
             require_once __DIR__ . '/Core.php';
-            $core = new FriendsRSS_Core();
+            $core = new \FriendsRSS_Core();
             if (!$core->isAnyScheduleDue()) {
                 return;
             }
@@ -244,10 +247,10 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
                 return;
             }
 
-            $options = Typecho_Widget::widget('Widget_Options');
-            $cronUrl = Typecho_Common::url('action/friends-rss?do=cron&soft=1', $options->index);
+            $options = \Typecho_Widget::widget('Widget_Options');
+            $cronUrl = \Typecho_Common::url('action/friends-rss?do=cron&soft=1', $options->index);
             self::fireAndForgetHttp($cronUrl);
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             // 软定时失败不影响正常页面
         }
     }
@@ -324,9 +327,14 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
      * @param string $lastResult 最后结果
      * @return string
      */
-    public static function parseShortcode($content, $widget, $lastResult)
+    public static function parseShortcode($content, $widget, $lastResult = null)
     {
-        if (strpos($content, '[rss') === false) {
+        // 兼容 1.2 链式钩子与 1.3 Plugin::filter()
+        if ($lastResult !== null && $lastResult !== false && $lastResult !== '') {
+            $content = $lastResult;
+        }
+
+        if (!is_string($content) || strpos($content, '[rss') === false) {
             return $content;
         }
 
@@ -361,7 +369,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
         try {
             // 引入核心类
             require_once 'Core.php';
-            $core = new FriendsRSS_Core();
+            $core = new \FriendsRSS_Core();
 
             // 获取RSS文章
             $articles = $core->getAggregatedArticles(false); // 不强制刷新，只读取缓存
@@ -378,7 +386,7 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
 
             // 渲染文章列表
             return self::renderBlockStyle($articles, $attributes);
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             return '<div class="friends-rss-error">获取友链RSS失败: ' . htmlspecialchars($e->getMessage()) . '</div>';
         }
     }
@@ -571,5 +579,10 @@ class FriendsRSS_Plugin implements Typecho_Plugin_Interface
     }
 }
 
-// 升级兼容：每次加载插件时注册访问触发钩子（无需停用再启用）
-Typecho_Plugin::factory('Widget_Archive')->footer = array('FriendsRSS_Plugin', 'maybeTriggerSoftCron');
+// 升级兼容：每次加载时注册访问触发钩子（无需停用再启用）
+\Typecho_Plugin::factory('Widget_Archive')->footer = array(Plugin::class, 'maybeTriggerSoftCron');
+
+// 兼容旧类名
+if (!class_exists('FriendsRSS_Plugin', false)) {
+    class_alias(__NAMESPACE__ . '\Plugin', 'FriendsRSS_Plugin');
+}

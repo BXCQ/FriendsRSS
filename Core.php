@@ -4,6 +4,7 @@ if (!defined('__TYPECHO_ROOT_DIR__')) exit;
 /**
  * 友链RSS聚合核心类 - 重写版
  * 增强RSS检测和拉取功能，完善错误日志系统
+ * 兼容 Typecho 1.2.1+ / 1.3.0
  */
 class FriendsRSS_Core
 {

@@ -72,18 +72,16 @@ try {
 
     frss_log("配置文件加载完成，开始初始化Widget");
 
-    // 确保加载Typecho核心文件
-    if (!class_exists('Typecho_Widget')) {
-        // 如果没有加载，尝试加载admin环境
+    // 确保加载Typecho核心（兼容 1.2 下划线类名与 1.3 命名空间）
+    if (!class_exists('Typecho_Widget') && !class_exists('\\Typecho\\Widget')) {
         if (file_exists(__TYPECHO_ROOT_DIR__ . '/admin/common.php')) {
             require_once __TYPECHO_ROOT_DIR__ . '/admin/common.php';
-        } else {
-            // 备用方案：直接加载必要的类文件
-            require_once __TYPECHO_ROOT_DIR__ . '/var/Typecho/Widget.php';
+        } elseif (file_exists(__TYPECHO_ROOT_DIR__ . '/var/Typecho/Common.php')) {
+            require_once __TYPECHO_ROOT_DIR__ . '/var/Typecho/Common.php';
         }
     }
 
-    // 使用与其他文件一致的旧API
+    // 使用与其他文件一致的旧API（1.3 通过 class_alias 兼容）
     $options = Typecho_Widget::widget('Widget_Options');
     $user = Typecho_Widget::widget('Widget_User');
 

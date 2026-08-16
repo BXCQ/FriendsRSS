@@ -793,6 +793,10 @@ if (file_exists($configFile)) {
 
 <?php
 // 后台访问同样可触发软定时
-FriendsRSS_Plugin::maybeTriggerSoftCron();
+if (class_exists('FriendsRSS_Plugin', false)) {
+    FriendsRSS_Plugin::maybeTriggerSoftCron();
+} elseif (class_exists('\\TypechoPlugin\\FriendsRSS\\Plugin', false)) {
+    \TypechoPlugin\FriendsRSS\Plugin::maybeTriggerSoftCron();
+}
 include __DIR__ . '/../../../admin/footer.php';
 ?>
